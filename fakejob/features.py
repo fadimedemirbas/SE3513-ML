@@ -93,6 +93,10 @@ class Config:
         return replace(self, **changes)
 
 
+# Configuration selected in Step 2 (feature_engineering.ipynb).
+STEP2_CONFIG = Config(word_ngrams=(1, 2), sublinear_tf=True, min_df=2, char_ngrams=(3, 5))
+
+
 def _text_column(fields: tuple) -> str:
     if tuple(fields) == tuple(CORE_TEXT_FIELDS):
         return "combined_text"

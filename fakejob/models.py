@@ -1,4 +1,5 @@
 """Model definitions shared across experiments."""
+from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.impute import SimpleImputer
@@ -23,3 +24,25 @@ def reference_pipeline():
         ("binary", SimpleImputer(strategy="most_frequent"), REFERENCE_BINARY_COLUMNS),
     ])
     return make_pipeline(features, LinearSVC(class_weight="balanced", random_state=42))
+
+
+class TrainingRowFilter(BaseEstimator, ClassifierMixin):
+    """Fit the wrapped estimator without the rows flagged in `exclude_column`.
+
+    Used for sensitivity analyses: flagged rows are dropped from every training
+    fold (including the inner threshold folds) but are still scored and
+    evaluated when they fall in a test fold.
+    """
+
+    def __init__(self, estimator, exclude_column: str):
+        self.estimator = estimator
+        self.exclude_column = exclude_column
+
+    def fit(self, X, y):
+        keep = ~X[self.exclude_column].astype(bool).to_numpy()
+        self.estimator_ = clone(self.estimator).fit(X[keep], y[keep])
+        self.classes_ = self.estimator_.classes_
+        return self
+
+    def decision_function(self, X):
+        return self.estimator_.decision_function(X)
