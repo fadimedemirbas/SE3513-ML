@@ -3,6 +3,7 @@
 **Proje:** SE3513 Machine Learning — Fake Job Posting Detection
 **Veri seti:** Real / Fake Job Posting Prediction (EMSCAD), Kaggle, version 1
 **Tarih:** 2026-11-25
+**Güncelleme:** 2026-11-26 (Bölüm 6 ve 7, Adım 2'den sonra güncellendi)
 **Amaç:** Bir sonraki geliştirme aşamasından önce bu veri seti üzerinde yapılmış herkese açık çalışmaları incelemek, güvenilir bulguları hatalı olanlardan ayırmak ve izleyeceğimiz metodolojiyi belirlemek.
 
 ---
@@ -105,21 +106,33 @@ Her fikir, Bölüm 6'daki protokol altında mevcut baseline'a karşı bir ablati
 ### Adım 2 — Feature engineering
 Bölüm 5'teki fikirlerin, her seferinde tek bir değişiklik yapılarak ablation'ları.
 
+**Tamamlandı** (`feature_engineering.ipynb`). Seçilen konfigürasyon: word 1–2 gram + `char_wb` 3–5 gram, `sublinear_tf=True`, `min_df=2`, `C=1`. Development CV PR-AUC 0.825 → 0.871 (15/15 fold'da daha iyi), F1 0.748 → 0.789 (14/15). Meta feature'lar, location, ekstra categorical ve binary alanlar karar kuralını geçemedi.
+
 ### Adım 3 — Model genişletmeleri
-SVM'in probability calibration'ı (`CalibratedClassifierCV`); sentence-embedding feature'ları; out-of-fold metin skorları ve structured features üzerinde gradient boosting (LightGBM).
+Adım 2 konfigürasyonu yeni baseline'dır. Önce iki kontrol yapılacak:
+- **Yeni fold'larda tekrar kontrol.** Adım 2 konfigürasyonu, Adım 1 baseline'ı ile hiç kullanılmamış bir CV seed'inden üretilen fold'larda bir kez daha karşılaştırılacak. Adım 2, aynı fold'larda 14 varyant arasından en iyisini seçti; kazanç yeni fold'larda da korunuyorsa bu seçimin bir ürünü değildir.
+- **Label noise kontrolü.** Her iki label'ı birden içeren 8 similarity grubu (73 ilan, 13 fake) incelenecek ve bunların training'den çıkarılmasının etkisi ölçülecek (sensitivity analysis). Label'lar değiştirilmeyecek.
+
+Adaylar çalıştırmadan önce sabitlenir ve sonuçlar görüldükten sonra yeni varyant eklenmez: SVM'in probability calibration'ı (`CalibratedClassifierCV`); sentence-embedding feature'ları; out-of-fold metin skorları ve structured features üzerinde gradient boosting (LightGBM, güçlü regularization ile).
 
 ### Adım 4 — Opsiyonel transformer fine-tuning
 GPU süresi elverirse, class weighting ile DistilBERT, aynı protokol altında değerlendirilecek.
 
 ### Adım 5 — Final model ve rapor
-Modeli development CV üzerinde seç, threshold'u sabitle, held-out test setinde bir kez değerlendir ve yorumlama (SVM coefficient'ları veya SHAP), hata analizi ile güncellenmiş bir limitations bölümü ekle.
+Modeli development CV üzerinde seç, threshold'u sabitle, held-out test setinde **bir kez** değerlendir ve group-level bootstrap confidence interval'larını raporla. Ek olarak:
+- **Yorumlama.** SVM coefficient'ları (veya SHAP) ile genel dolandırıcılık işaretlerini (ör. "registration fee", "wire transfer") şirket adları gibi veri setine özgü izlerden ayır.
+- **Shortcut testi.** Şirket adları maskelendiğinde veya `company_profile` çıkarıldığında performans düşüşünü ölç. Büyük bir düşüş, modelin dolandırıcılık işaretlerini öğrenmek yerine şirketleri ezberlediği anlamına gelir.
+- **Hata analizi.** Modelin en emin olduğu hatalı tahminleri incele; bir kısmı label hatası olabilir.
+- **Limitations.** CV–test farkını ve Bölüm 7'deki kısıtları yukarıdaki ölçümlerle birlikte raporla.
 
 ---
 
 ## 7. Riskler ve Kısıtlar
 
-- **Küçük pozitif sınıf.** Toplamda yaklaşık 850 fake ilan; herhangi tek bir split yüksek variance'a sahip.
-- **Tek kaynak ve dönem.** Sonuçlar başka platformlara veya güncel scam'lere aktarılamayabilir.
-- **Validation'ın yeniden kullanımı.** Önceki deneyler tek bir validation setini defalarca kullandı. Yeni protokol selection bias'ı azaltır ama tamamen ortadan kaldırmaz; test seti yalnızca bir kez kullanılmalıdır.
-- **Location feature'ları.** Güçlü ama potansiyel olarak yanıltıcı (spurious); elde edilecek herhangi bir kazanç bu uyarıyla birlikte raporlanacak.
-- **Label noise.** Birebir aynı description'lara sahip en az bir grup çelişkili label'lar taşıyor.
+| Risk | Bildiklerimiz | Önlem | Ne zaman |
+|---|---|---|---|
+| **Küçük pozitif sınıf** | 855 fake ilan var, ancak yalnızca 518 bağımsız similarity grubu (development verisinde 436); herhangi tek bir split yüksek variance'a sahip | 15 fold üzerinde mean ± std, paired comparison, sıkı karar kuralı, test setinde bootstrap CI; düşük variance'lı modeller tercih edilir | Tüm adımlar |
+| **Selection bias** | Adım 2, aynı fold'larda 14 varyant arasından en iyisini seçti; bu yüzden CV skoru biraz iyimser | Yeni fold'larda tekrar kontrol; aday listelerini çalıştırmadan önce sabitleme; test setini bir kez kullanma; CV–test farkını raporlama | Adım 3 ve 5 |
+| **Tek kaynak ve dönem** | Tek platform, 2012–2014; tarih kolonu yok, bu yüzden zamana göre split mümkün değil | Bu veriyle çözülemez. Yorumlama ve shortcut testi modelin neye dayandığını gösterir; limitations bölümünde açıkça belirtilir | Adım 5 |
+| **Label noise** | Birden fazla ilan içeren 1,767 grubun 8'inde label'lar karışık (73 ilan, 13 fake); birebir aynı description'lara sahip bir küme çelişkili label'lar taşıyor | Label'ları değiştirmeden elle inceleme ve sensitivity analysis; emin olunan hataların analizi | Adım 3 ve 5 |
+| **Location feature'ları** | Adım 2'de ölçülebilir kazanç yok; benimsenmedi | Ek bir işlem gerekmiyor | — |
