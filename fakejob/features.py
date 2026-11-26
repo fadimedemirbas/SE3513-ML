@@ -13,7 +13,9 @@ import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from sklearn.svm import LinearSVC
@@ -90,6 +92,8 @@ class Config:
     meta: bool = False
     location: str | None = None        # None, "country" or "country_state"
     embeddings: bool = False           # append the sentence-embedding columns (Step 3)
+    profile_interaction: bool = False  # word TF-IDF repeated for postings with an empty company profile
+    classifier: str = "svm"            # "svm" (LinearSVC) or "logreg" (LogisticRegression)
     C: float = 1.0
     max_iter: int = 5000               # converged models stop earlier, so results match the 1000 default
 
@@ -99,6 +103,35 @@ class Config:
 
 # Configuration selected in Step 2 (feature_engineering.ipynb).
 STEP2_CONFIG = Config(word_ngrams=(1, 2), sublinear_tf=True, min_df=2, char_ngrams=(3, 5))
+
+
+class EmptyProfileInteraction(BaseEstimator, TransformerMixin):
+    """Word TF-IDF block that is non-zero only for postings with an empty company profile.
+
+    Added next to the ordinary word block, it lets a linear model learn separate
+    word weights for postings without a profile, where most errors occur.
+    Expects two columns: the text column and the 0/1 `empty_company_profile` flag.
+    """
+
+    def __init__(self, ngram_range=(1, 1), sublinear_tf=False, min_df=1):
+        self.ngram_range = ngram_range
+        self.sublinear_tf = sublinear_tf
+        self.min_df = min_df
+
+    def fit(self, X, y=None):
+        text, empty = X.iloc[:, 0], X.iloc[:, 1].to_numpy(dtype=bool)
+        # Vocabulary from the empty-profile postings only: these are the rows the block describes.
+        self.vectorizer_ = TfidfVectorizer(
+            ngram_range=self.ngram_range, sublinear_tf=self.sublinear_tf, min_df=self.min_df,
+        ).fit(text[empty])
+        return self
+
+    def transform(self, X):
+        text, empty = X.iloc[:, 0], X.iloc[:, 1].to_numpy(dtype=float)
+        return self.vectorizer_.transform(text).multiply(empty[:, None]).tocsr()
+
+    def get_feature_names_out(self, input_features=None):
+        return np.array([f"empty_profile__{t}" for t in self.vectorizer_.get_feature_names_out()])
 
 
 def _text_column(fields: tuple) -> str:
@@ -141,8 +174,20 @@ def build_pipeline(config: Config = Config()):
     if config.embeddings:
         # Already L2-normalised, like each TF-IDF block, so they are passed through unscaled.
         transformers.append(("embeddings", "passthrough", EMBEDDING_COLUMNS))
+    if config.profile_interaction:
+        transformers.append((
+            "empty_profile_word",
+            EmptyProfileInteraction(**word_kwargs),
+            [_text_column(config.text_fields), "empty_company_profile"],
+        ))
+        transformers.append(("empty_profile_flag", "passthrough", ["empty_company_profile"]))
 
-    return make_pipeline(
-        ColumnTransformer(transformers),
-        LinearSVC(C=config.C, class_weight="balanced", random_state=42, max_iter=config.max_iter),
-    )
+    if config.classifier == "svm":
+        classifier = LinearSVC(C=config.C, class_weight="balanced", random_state=42,
+                               max_iter=config.max_iter)
+    elif config.classifier == "logreg":
+        classifier = LogisticRegression(C=config.C, class_weight="balanced", solver="liblinear",
+                                        max_iter=config.max_iter, random_state=42)
+    else:
+        raise ValueError(f"Unknown classifier: {config.classifier}")
+    return make_pipeline(ColumnTransformer(transformers), classifier)
