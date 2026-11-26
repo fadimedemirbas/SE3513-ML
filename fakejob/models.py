@@ -103,3 +103,28 @@ class GroupedStacking(BaseEstimator, ClassifierMixin):
 
     def predict(self, X):
         return self.classes_[(self.predict_proba(X)[:, 1] >= 0.5).astype(int)]
+
+
+class ScoreAverage(BaseEstimator, ClassifierMixin):
+    """Average of standardised decision scores from several models (an unweighted ensemble).
+
+    Each model's scores are put on a common scale with the mean and standard
+    deviation of its scores on the training rows, so no model dominates because
+    of its score range.
+    """
+
+    def __init__(self, models):
+        self.models = models
+
+    def fit(self, X, y):
+        self.models_ = [clone(m).fit(X, y) for m in self.models]
+        self.scales_ = []
+        for model in self.models_:
+            scores = model.decision_function(X)
+            self.scales_.append((scores.mean(), scores.std() or 1.0))
+        self.classes_ = self.models_[0].classes_
+        return self
+
+    def decision_function(self, X):
+        return np.mean([(m.decision_function(X) - mean) / std
+                        for m, (mean, std) in zip(self.models_, self.scales_)], axis=0)

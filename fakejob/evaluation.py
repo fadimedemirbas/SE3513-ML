@@ -43,6 +43,38 @@ def best_f1_threshold(y_true, scores) -> float:
     return float(thresholds[np.argmax(f1)])
 
 
+def _counts_at(y_true, scores, candidates):
+    """True and false positives for each candidate threshold (rule: score >= t)."""
+    y_true, scores = np.asarray(y_true), np.asarray(scores)
+    positives, negatives = np.sort(scores[y_true == 1]), np.sort(scores[y_true == 0])
+    tp = len(positives) - np.searchsorted(positives, candidates, side="left")
+    fp = len(negatives) - np.searchsorted(negatives, candidates, side="left")
+    return tp, fp
+
+
+def best_f1_group_thresholds(y_true, scores, groups) -> dict:
+    """One threshold per group (exactly two groups), chosen jointly to maximise overall F1.
+
+    The best F1 threshold always sits at the score of a positive example, so only
+    those scores (plus +inf, "flag nothing in this group") are searched.
+    """
+    y_true, scores, groups = np.asarray(y_true), np.asarray(scores), np.asarray(groups)
+    labels = np.unique(groups)
+    assert len(labels) == 2, "group thresholds are implemented for two groups"
+    curves = []
+    for label in labels:
+        member = groups == label
+        candidates = np.append(np.unique(scores[member & (y_true == 1)]), np.inf)
+        tp, fp = _counts_at(y_true[member], scores[member], candidates)
+        curves.append((candidates, tp, fp))
+    (c0, tp0, fp0), (c1, tp1, fp1) = curves
+    tp = tp0[:, None] + tp1[None, :]
+    fp = fp0[:, None] + fp1[None, :]
+    f1 = 2 * tp / np.maximum(tp + fp + y_true.sum(), 1)
+    i, j = np.unravel_index(np.argmax(f1), f1.shape)
+    return {labels[0]: float(c0[i]), labels[1]: float(c1[j])}
+
+
 def threshold_metrics(y_true, scores, threshold) -> dict:
     predictions = (scores >= threshold).astype(int)
     return {
@@ -102,7 +134,7 @@ def fit_calibrators(scores, y) -> dict:
 
 
 def _run_fold(estimator, X, y, groups, train_pos, test_pos, repeat, fold, inner_splits, seed,
-              fixed_threshold, calibrate=False):
+              fixed_threshold, calibrate=False, threshold_group_column=None):
     X_train, y_train = X.iloc[train_pos], y.iloc[train_pos]
     X_test, y_test = X.iloc[test_pos], y.iloc[test_pos]
 
@@ -127,6 +159,14 @@ def _run_fold(estimator, X, y, groups, train_pos, test_pos, repeat, fold, inner_
 
     oof = pd.DataFrame({"repeat": repeat, "fold": fold, "score": scores}, index=X_test.index)
 
+    if threshold_group_column is not None:
+        # Same scores, but a separate threshold per group, chosen on the inner out-of-fold scores.
+        group_thresholds = best_f1_group_thresholds(y_train, train_oof, X_train[threshold_group_column])
+        per_row = X_test[threshold_group_column].map(group_thresholds).to_numpy(dtype=float)
+        grouped = threshold_metrics(y_test, scores, per_row)
+        row.update({f"{name}_grouped": value for name, value in grouped.items()})
+        row.update({f"threshold_{threshold_group_column}_{g}": t for g, t in group_thresholds.items()})
+
     if calibrate:
         # Calibrators are fitted on the inner out-of-fold scores of the training fold only.
         row["brier_prior"] = brier_score_loss(y_test, np.full(len(y_test), y_train.mean()))
@@ -148,7 +188,7 @@ class CVResult:
         """Mean and standard deviation of each metric across all outer folds."""
         columns = [c for c in self.folds.columns
                    if c in METRICS or c.endswith("_fixed") or c == "threshold"
-                   or c.startswith(("brier_", "ece_"))]
+                   or c.startswith(("brier_", "ece_", "threshold_")) or c.endswith("_grouped")]
         stats = self.folds[columns].agg(["mean", "std"]).T
         return pd.Series(
             {name: f"{row['mean']:.3f} ± {row['std']:.3f}" for name, row in stats.iterrows()},
@@ -169,6 +209,7 @@ def repeated_group_cv(
     fixed_threshold: float | None = None,
     n_jobs: int = 1,
     calibrate: bool = False,
+    threshold_group_column: str | None = None,
 ) -> CVResult:
     """Repeated StratifiedGroupKFold with a nested threshold choice in every fold.
 
@@ -178,6 +219,11 @@ def repeated_group_cv(
     With `calibrate=True`, Platt and isotonic calibrators are fitted on the
     inner out-of-fold scores of each training fold and their Brier score and
     expected calibration error on the test fold are added to the results.
+
+    With `threshold_group_column` (a 0/1 column of X), a second set of threshold
+    metrics (`f1_grouped`, ...) uses one threshold per group, chosen jointly on the
+    inner out-of-fold scores to maximise overall F1. Scores, and therefore
+    PR-AUC, are unchanged.
     """
     tasks = []
     for repeat in range(n_repeats):
@@ -191,6 +237,7 @@ def repeated_group_cv(
         delayed(_run_fold)(
             estimator, X, y, groups, train_pos, test_pos, repeat, fold,
             inner_splits, seed + 1000 + repeat * n_splits + fold, fixed_threshold, calibrate,
+            threshold_group_column,
         )
         for train_pos, test_pos, repeat, fold in tasks
     )
