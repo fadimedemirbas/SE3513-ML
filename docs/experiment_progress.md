@@ -46,7 +46,7 @@ We selected Platt calibration to translate SVM scores into estimated fraud proba
 | Development input | Mean AP | Fake precision | Fake recall | Fake F1 |
 |---|---:|---:|---:|---:|
 | Original | 0.871 | 0.834 | 0.752 | 0.789 |
-| Recognized company names masked | 0.871 | 0.820 | 0.755 | 0.785 |
+| Recognized company names masked | 0.871 | 0.821 | 0.757 | 0.786 |
 | Entire company profile removed | 0.723 | 0.734 | 0.601 | 0.656 |
 
 Removing profiles led to 99, 113 and 116 additional missed fake postings in the three repeats. Each repeat covers the same 724 fake postings. Masking recognizable names changed 1,171 postings, including only 37 fake postings. Its small effect leaves open how much the model relies on unrecognized names or employer-specific wording. [Profile removal](../results/interpretation_without_profile_folds.csv) · [Name masking](../results/interpretation_masked_names_folds.csv)
