@@ -174,6 +174,16 @@ def compare(baseline: CVResult, candidate: CVResult, metrics=("average_precision
     return pd.DataFrame(rows).set_index("metric")
 
 
+def passes_rule(comparison: pd.DataFrame, metric: str = "average_precision", min_folds: int = 12) -> bool:
+    """Decision rule from Step 1: positive mean paired gain and better in >= min_folds folds.
+
+    With 15 folds, 12 wins corresponds to a one-sided sign test p of about 0.018.
+    """
+    row = comparison.loc[metric]
+    wins = int(str(row["folds_improved"]).split("/")[0])
+    return bool(row["mean_diff"] > 0 and wins >= min_folds)
+
+
 def bootstrap_ci(
     y_true: pd.Series,
     scores: np.ndarray,

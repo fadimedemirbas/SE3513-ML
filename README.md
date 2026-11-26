@@ -8,7 +8,8 @@ SE3513 Machine Learning Project — Fake Job Posting Detection
 | `fake_job_detection.ipynb` | Main notebook: data exploration, grouped split, Experiments 1–6, final model and limitations |
 | `fake_job_structured_model.joblib` | Saved final model (class-weighted Linear SVM) and its decision threshold |
 | `evaluation_framework.ipynb` | Step 1: repeated grouped cross-validation protocol and baseline results |
-| `fakejob/` | Shared code: data loading and split (`data.py`), evaluation protocol (`evaluation.py`), model definitions (`models.py`) |
+| `feature_engineering.ipynb` | Step 2: feature engineering ablations and the selected feature configuration |
+| `fakejob/` | Shared code: data loading and split (`data.py`), evaluation protocol (`evaluation.py`), model definitions (`models.py`), Step 2 features and configurable pipelines (`features.py`) |
 | `results/` | Fold-level CV results and test confidence intervals, used for paired comparisons |
 | `docs/pre_development_research_report.md` | Review of public notebooks on this dataset and the planned methodology |
 | `docs/pre_development_research_report_tr.md` | Turkish version of the same report |
