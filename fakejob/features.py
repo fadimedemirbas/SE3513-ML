@@ -72,6 +72,9 @@ META_COLUMNS = (
     + ["upper_ratio", "exclaim_per_1k"]
 )
 
+# Columns of fakejob.embeddings.posting_embeddings() (384-dimensional all-MiniLM-L6-v2 vectors).
+EMBEDDING_COLUMNS = [f"emb_{i}" for i in range(384)]
+
 
 @dataclass(frozen=True)
 class Config:
@@ -86,6 +89,7 @@ class Config:
     binary: tuple = tuple(BASE_BINARY)
     meta: bool = False
     location: str | None = None        # None, "country" or "country_state"
+    embeddings: bool = False           # append the sentence-embedding columns (Step 3)
     C: float = 1.0
     max_iter: int = 5000               # converged models stop earlier, so results match the 1000 default
 
@@ -134,6 +138,9 @@ def build_pipeline(config: Config = Config()):
     if config.meta:
         # Scaled to [0, 1] like the TF-IDF values; StandardScaler made liblinear fail to converge.
         transformers.append(("meta", MinMaxScaler(clip=True), META_COLUMNS))
+    if config.embeddings:
+        # Already L2-normalised, like each TF-IDF block, so they are passed through unscaled.
+        transformers.append(("embeddings", "passthrough", EMBEDDING_COLUMNS))
 
     return make_pipeline(
         ColumnTransformer(transformers),

@@ -9,8 +9,11 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from sklearn.base import clone
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
+    brier_score_loss,
     f1_score,
     precision_recall_curve,
     precision_score,
@@ -57,28 +60,56 @@ def all_metrics(y_true, scores, threshold) -> dict:
     }
 
 
+def inner_oof_scores(estimator, X, y, groups, n_splits, seed) -> np.ndarray:
+    """Out-of-fold scores for every row of the outer training fold (inner grouped CV)."""
+    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    oof_scores = np.empty(len(y))
+    for train_pos, valid_pos in splitter.split(X, y, groups):
+        model = clone(estimator).fit(X.iloc[train_pos], y.iloc[train_pos])
+        oof_scores[valid_pos] = model_scores(model, X.iloc[valid_pos])
+    return oof_scores
+
+
 def inner_threshold(estimator, X, y, groups, n_splits, seed) -> float:
     """Pick a threshold from out-of-fold scores inside the outer training fold.
 
     The outer test fold is never seen here, so the F1 reported on it is not
     tuned on itself.
     """
-    splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
-    oof_scores = np.empty(len(y))
-    for train_pos, valid_pos in splitter.split(X, y, groups):
-        model = clone(estimator).fit(X.iloc[train_pos], y.iloc[train_pos])
-        oof_scores[valid_pos] = model_scores(model, X.iloc[valid_pos])
-    return best_f1_threshold(y, oof_scores)
+    return best_f1_threshold(y, inner_oof_scores(estimator, X, y, groups, n_splits, seed))
+
+
+def expected_calibration_error(y_true, probabilities, n_bins: int = 10) -> float:
+    """Weighted mean |observed fake rate - mean predicted probability| over equal-width bins."""
+    y_true, probabilities = np.asarray(y_true), np.asarray(probabilities)
+    bins = np.minimum((probabilities * n_bins).astype(int), n_bins - 1)
+    error = 0.0
+    for b in np.unique(bins):
+        in_bin = bins == b
+        error += in_bin.mean() * abs(y_true[in_bin].mean() - probabilities[in_bin].mean())
+    return float(error)
+
+
+def fit_calibrators(scores, y) -> dict:
+    """Score-to-probability maps fitted on out-of-fold scores: Platt (sigmoid) and isotonic."""
+    scores = np.asarray(scores).reshape(-1, 1)
+    platt = LogisticRegression(C=1e6).fit(scores, y)
+    isotonic = IsotonicRegression(y_min=0, y_max=1, out_of_bounds="clip").fit(scores.ravel(), y)
+    return {
+        "platt": lambda s: platt.predict_proba(np.asarray(s).reshape(-1, 1))[:, 1],
+        "isotonic": lambda s: isotonic.predict(np.asarray(s)),
+    }
 
 
 def _run_fold(estimator, X, y, groups, train_pos, test_pos, repeat, fold, inner_splits, seed,
-              fixed_threshold):
+              fixed_threshold, calibrate=False):
     X_train, y_train = X.iloc[train_pos], y.iloc[train_pos]
     X_test, y_test = X.iloc[test_pos], y.iloc[test_pos]
 
-    threshold = inner_threshold(
+    train_oof = inner_oof_scores(
         estimator, X_train, y_train, groups.iloc[train_pos], inner_splits, seed
     )
+    threshold = best_f1_threshold(y_train, train_oof)
     model = clone(estimator).fit(X_train, y_train)
     scores = model_scores(model, X_test)
 
@@ -95,6 +126,15 @@ def _run_fold(estimator, X, y, groups, train_pos, test_pos, repeat, fold, inner_
         row.update({f"{name}_fixed": value for name, value in fixed.items()})
 
     oof = pd.DataFrame({"repeat": repeat, "fold": fold, "score": scores}, index=X_test.index)
+
+    if calibrate:
+        # Calibrators are fitted on the inner out-of-fold scores of the training fold only.
+        row["brier_prior"] = brier_score_loss(y_test, np.full(len(y_test), y_train.mean()))
+        for method, to_probability in fit_calibrators(train_oof, y_train).items():
+            probabilities = to_probability(scores)
+            row[f"brier_{method}"] = brier_score_loss(y_test, probabilities)
+            row[f"ece_{method}"] = expected_calibration_error(y_test, probabilities)
+            oof[f"prob_{method}"] = probabilities
     return row, oof
 
 
@@ -107,7 +147,8 @@ class CVResult:
     def summary(self) -> pd.Series:
         """Mean and standard deviation of each metric across all outer folds."""
         columns = [c for c in self.folds.columns
-                   if c in METRICS or c.endswith("_fixed") or c == "threshold"]
+                   if c in METRICS or c.endswith("_fixed") or c == "threshold"
+                   or c.startswith(("brier_", "ece_"))]
         stats = self.folds[columns].agg(["mean", "std"]).T
         return pd.Series(
             {name: f"{row['mean']:.3f} ± {row['std']:.3f}" for name, row in stats.iterrows()},
@@ -127,11 +168,16 @@ def repeated_group_cv(
     seed: int = 0,
     fixed_threshold: float | None = None,
     n_jobs: int = 1,
+    calibrate: bool = False,
 ) -> CVResult:
     """Repeated StratifiedGroupKFold with a nested threshold choice in every fold.
 
     Each repeat reshuffles the groups with a different seed. Groups never cross
     fold boundaries, so near-duplicate postings stay on one side.
+
+    With `calibrate=True`, Platt and isotonic calibrators are fitted on the
+    inner out-of-fold scores of each training fold and their Brier score and
+    expected calibration error on the test fold are added to the results.
     """
     tasks = []
     for repeat in range(n_repeats):
@@ -144,7 +190,7 @@ def repeated_group_cv(
     outputs = Parallel(n_jobs=n_jobs)(
         delayed(_run_fold)(
             estimator, X, y, groups, train_pos, test_pos, repeat, fold,
-            inner_splits, seed + 1000 + repeat * n_splits + fold, fixed_threshold,
+            inner_splits, seed + 1000 + repeat * n_splits + fold, fixed_threshold, calibrate,
         )
         for train_pos, test_pos, repeat, fold in tasks
     )
