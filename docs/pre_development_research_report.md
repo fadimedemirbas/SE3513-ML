@@ -3,6 +3,7 @@
 **Project:** SE3513 Machine Learning — Fake Job Posting Detection
 **Dataset:** Real / Fake Job Posting Prediction (EMSCAD), Kaggle, version 1
 **Date:** 2026-11-25
+**Updated:** 2026-11-26 (Sections 6 and 7 revised after Step 2)
 **Purpose:** Review publicly available work on this dataset before the next development phase, separate reliable findings from flawed ones, and fix the methodology we will follow.
 
 ---
@@ -105,21 +106,33 @@ Each idea will be tested as an ablation against the current baseline under the p
 ### Step 2 — Feature engineering
 Ablations of the ideas in Section 5, one change at a time.
 
+**Completed** (`feature_engineering.ipynb`). Selected configuration: word 1–2 grams + `char_wb` 3–5 grams, `sublinear_tf=True`, `min_df=2`, `C=1`. Development CV PR-AUC 0.825 → 0.871 (better in 15/15 folds), F1 0.748 → 0.789 (14/15). Meta features, location, extra categorical and binary fields did not pass the decision rule.
+
 ### Step 3 — Model extensions
-Probability calibration of the SVM (`CalibratedClassifierCV`); sentence-embedding features; gradient boosting (LightGBM) on out-of-fold text scores plus structured features.
+The Step 2 configuration is the new baseline. Two checks come first:
+- **Re-check on fresh folds.** Compare the Step 2 configuration with the Step 1 baseline once more on folds from an unused CV seed. Step 2 selected the best of 14 variants on the same folds; if the gain also holds on new folds, it is not a product of that selection.
+- **Label-noise check.** Review the 8 similarity groups that contain both labels (73 postings, 13 fake) and measure the effect of removing them from training (sensitivity analysis). Labels are not changed.
+
+The candidates are fixed before running, and no variants are added after seeing the results: probability calibration of the SVM (`CalibratedClassifierCV`); sentence-embedding features; gradient boosting (LightGBM, strongly regularised) on out-of-fold text scores plus structured features.
 
 ### Step 4 — Optional transformer fine-tuning
 DistilBERT with class weighting, evaluated under the same protocol, if GPU time allows.
 
 ### Step 5 — Final model and report
-Select the model on development CV, fix the threshold, evaluate once on the held-out test set, and add interpretation (SVM coefficients or SHAP), error analysis and an updated limitations section.
+Select the model on development CV, fix the threshold, evaluate **once** on the held-out test set and report group-level bootstrap confidence intervals. In addition:
+- **Interpretation.** Use SVM coefficients (or SHAP) to separate general fraud cues (e.g. "registration fee", "wire transfer") from dataset-specific traces such as company names.
+- **Shortcut test.** Measure the performance drop when company names are masked or `company_profile` is removed. A large drop means the model memorises companies rather than learning fraud cues.
+- **Error analysis.** Inspect the most confident errors; some may be label errors.
+- **Limitations.** Report the CV–test gap and the limitations in Section 7 with the measurements above.
 
 ---
 
 ## 7. Risks and Limitations
 
-- **Small positive class.** About 850 fake postings in total; any single split has high variance.
-- **Single source and period.** Results may not transfer to other platforms or to current scams.
-- **Validation reuse.** Earlier experiments reused one validation set many times. The new protocol reduces but does not eliminate selection bias; the test set must be used once.
-- **Location features.** Strong but potentially spurious; any gain will be reported with this caveat.
-- **Label noise.** At least one group of identical descriptions carries conflicting labels.
+| Risk | What we know | Mitigation | When |
+|---|---|---|---|
+| **Small positive class** | 855 fake postings, but only 518 independent similarity groups (436 in development data); any single split has high variance | Mean ± std over 15 folds, paired comparisons, strict decision rule, bootstrap CIs on the test set; prefer low-variance models | All steps |
+| **Selection bias** | Step 2 chose the best of 14 variants on the same folds, so its CV score is slightly optimistic | Re-check on fresh folds; fix candidate lists before running; use the test set once; report the CV–test gap | Steps 3 and 5 |
+| **Single source and period** | One platform, 2012–2014; no date column, so a temporal split is not possible | Cannot be solved with this data. Interpretation and the shortcut test show what the model relies on; stated clearly in the limitations | Step 5 |
+| **Label noise** | 8 of 1,767 multi-posting groups have mixed labels (73 postings, 13 fake); one set of identical descriptions has conflicting labels | Manual review and sensitivity analysis without changing labels; confident-error analysis | Steps 3 and 5 |
+| **Location features** | No measurable gain in Step 2; not adopted | Nothing further needed | — |
