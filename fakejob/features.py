@@ -8,6 +8,8 @@ lives inside the pipeline returned by `build_pipeline()` and is therefore
 fitted on the training fold only.
 """
 from dataclasses import dataclass, field, replace
+import html
+import re
 
 import numpy as np
 import pandas as pd
@@ -32,12 +34,39 @@ EXTRA_BINARY = ["has_questions", "has_salary_range"]
 MASKED_TOKENS = {"url": "#URL_", "email": "#EMAIL_", "phone": "#PHONE_"}
 
 
-def posting_features(model_df: pd.DataFrame) -> pd.DataFrame:
-    """Raw columns plus row-wise derived features used by all Step 2 pipelines."""
+_GLUED_WORDS = re.compile(r"(?<=[a-z])(?=[A-Z][a-z])")
+_GLUED_SENTENCES = re.compile(r"(?<=[a-z][.!?:;,])(?=[A-Za-z])")
+
+
+def clean_posting_text(text: pd.Series) -> pd.Series:
+    """Repair text joined when the HTML of a posting was removed.
+
+    List items and paragraphs were concatenated without a space ("platformDevelop",
+    "them.Carefully"), so the word TF-IDF saw invented tokens such as "platformdevelop".
+    A space is inserted between a lower-case letter and a following capitalised word,
+    and after sentence punctuation directly followed by a letter. HTML entities
+    ("&amp;") are decoded and runs of whitespace collapsed. Each posting is changed on
+    its own, so nothing is learned across rows.
+    """
+    text = text.map(html.unescape)
+    text = text.str.replace(_GLUED_WORDS, " ", regex=True)
+    text = text.str.replace(_GLUED_SENTENCES, " ", regex=True)
+    return text.str.replace(r"\s+", " ", regex=True).str.strip()
+
+
+def posting_features(model_df: pd.DataFrame, clean_text: bool = False) -> pd.DataFrame:
+    """Raw columns plus row-wise derived features used by all Step 2 pipelines.
+
+    With `clean_text=True` the text fields are repaired with `clean_posting_text()`
+    before any feature is derived from them. The default keeps the original text, so
+    earlier results are unchanged.
+    """
     out = pd.DataFrame(index=model_df.index)
 
     for col in ALL_TEXT_FIELDS:
         out[col] = model_df[col].fillna("")
+        if clean_text:
+            out[col] = clean_posting_text(out[col])
     out["combined_text"] = out[CORE_TEXT_FIELDS].agg(" ".join, axis=1)
     out["all_text"] = out[ALL_TEXT_FIELDS].agg(" ".join, axis=1)
 
