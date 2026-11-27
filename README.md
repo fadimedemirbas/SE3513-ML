@@ -11,6 +11,7 @@ SE3513 Machine Learning Project — Fake Job Posting Detection
 | `feature_engineering.ipynb` | Step 2: feature engineering ablations and the selected feature configuration |
 | `robustness_checks.ipynb` | Checks before Step 3: Step 2 selection on fresh CV folds and label-noise sensitivity analysis |
 | `model_extensions.ipynb` | Step 3: calibration, sentence-embedding features and LightGBM stacking against the Step 2 model |
+| `text_cleaning.ipynb` | Data-quality check: words joined when the HTML was removed, and whether repairing them improves the selected model |
 | `f1_improvements.ipynb` | F1 experiments for postings without a company profile: group thresholds, interaction features and an SVM + logistic regression ensemble |
 | `fakejob/` | Shared code: data loading and split (`data.py`), evaluation protocol (`evaluation.py`), model definitions (`models.py`), Step 2 features and configurable pipelines (`features.py`), sentence embeddings (`embeddings.py`) |
 | `results/` | Fold-level CV results and test confidence intervals, used for paired comparisons |
