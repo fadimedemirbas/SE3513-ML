@@ -89,6 +89,12 @@ The larger subset provided 213 fraudulent training examples, up from 33. DistilB
 
 The saved **reference SVM** detected 98 of 131 fraudulent test postings, missed 33 and produced 16 false alarms among 2,466 real postings. Its accuracy was 98.1%, ROC AUC was 0.973 and fake-class F1 was 0.800 (95% group-bootstrap interval 0.701–0.869). A clean-environment rerun reproduced the reference test results. [Reference test estimates and intervals](../results/step1_reference_svm_test_ci.csv)
 
+## Early test evaluation of the selected SVM (withdrawn)
+
+Commit `c70c1b4` locked the selected Step 2 SVM (raw threshold −0.210 from 5-fold grouped out-of-fold development scores, seed 0) and evaluated it once on the test split. It detected 109 of 131 fraudulent postings, missed 22 and produced 11 false alarms among 2,466 real postings: AP 0.918 (95% group-bootstrap interval 0.849–0.961), ROC AUC 0.982, fake precision 0.908, recall 0.832 and F1 0.869 (0.796–0.923). The lock was later reproduced exactly from the project code (same threshold, identical test predictions).
+
+The commit was reverted because development was not finished. The result is recorded here so that it is not lost: later changes are judged only on development cross-validation with rules fixed in advance, the test split is not evaluated again until the final model is locked, and the report states that this early evaluation took place. The files remain available in the history (`git show c70c1b4`).
+
 ## Where to continue
 
 | Priority | Task | Evidence to add here |
