@@ -43,6 +43,26 @@ def best_f1_threshold(y_true, scores) -> float:
     return float(thresholds[np.argmax(f1)])
 
 
+def best_fbeta_threshold(y_true, scores, beta: float) -> float:
+    """Threshold that maximises the fake-class F-beta score (rule: score >= t).
+
+    beta > 1 weights recall more than precision; beta = 2 counts recall twice as much.
+    """
+    precision, recall, thresholds = precision_recall_curve(y_true, scores)
+    precision, recall = precision[:-1], recall[:-1]
+    b2 = beta ** 2
+    denominator = b2 * precision + recall
+    fbeta = np.divide((1 + b2) * precision * recall, denominator, out=np.zeros_like(denominator),
+                      where=denominator > 0)
+    return float(thresholds[np.argmax(fbeta)])
+
+
+def fbeta_from_counts(precision: float, recall: float, beta: float) -> float:
+    b2 = beta ** 2
+    denominator = b2 * precision + recall
+    return float((1 + b2) * precision * recall / denominator) if denominator > 0 else 0.0
+
+
 def _counts_at(y_true, scores, candidates):
     """True and false positives for each candidate threshold (rule: score >= t)."""
     y_true, scores = np.asarray(y_true), np.asarray(scores)
@@ -134,7 +154,7 @@ def fit_calibrators(scores, y) -> dict:
 
 
 def _run_fold(estimator, X, y, groups, train_pos, test_pos, repeat, fold, inner_splits, seed,
-              fixed_threshold, calibrate=False, threshold_group_column=None):
+              fixed_threshold, calibrate=False, threshold_group_column=None, fbeta=None):
     X_train, y_train = X.iloc[train_pos], y.iloc[train_pos]
     X_test, y_test = X.iloc[test_pos], y.iloc[test_pos]
 
@@ -158,6 +178,19 @@ def _run_fold(estimator, X, y, groups, train_pos, test_pos, repeat, fold, inner_
         row.update({f"{name}_fixed": value for name, value in fixed.items()})
 
     oof = pd.DataFrame({"repeat": repeat, "fold": fold, "score": scores}, index=X_test.index)
+
+    if fbeta is not None:
+        # Second operating point on the same scores: threshold chosen to maximise F-beta
+        # on the same inner out-of-fold scores as the F1 threshold.
+        name = f"f{fbeta:g}"
+        row[f"{name}_at_f1_threshold"] = fbeta_from_counts(row["precision"], row["recall"], fbeta)
+        beta_threshold = best_fbeta_threshold(y_train, train_oof, fbeta)
+        at_beta = threshold_metrics(y_test, scores, beta_threshold)
+        row[f"threshold_{name}"] = beta_threshold
+        row[f"precision_{name}"] = at_beta["precision"]
+        row[f"recall_{name}"] = at_beta["recall"]
+        row[f"f1_{name}"] = at_beta["f1"]
+        row[name] = fbeta_from_counts(at_beta["precision"], at_beta["recall"], fbeta)
 
     if threshold_group_column is not None:
         # Same scores, but a separate threshold per group, chosen on the inner out-of-fold scores.
@@ -210,6 +243,7 @@ def repeated_group_cv(
     n_jobs: int = 1,
     calibrate: bool = False,
     threshold_group_column: str | None = None,
+    fbeta: float | None = None,
 ) -> CVResult:
     """Repeated StratifiedGroupKFold with a nested threshold choice in every fold.
 
@@ -224,6 +258,11 @@ def repeated_group_cv(
     metrics (`f1_grouped`, ...) uses one threshold per group, chosen jointly on the
     inner out-of-fold scores to maximise overall F1. Scores, and therefore
     PR-AUC, are unchanged.
+
+    With `fbeta` (for example 2), a second threshold that maximises F-beta on the same
+    inner out-of-fold scores is added (`threshold_f2`, `precision_f2`, `recall_f2`,
+    `f1_f2`, `f2`), together with the F-beta of the F1 threshold (`f2_at_f1_threshold`).
+    The model and its scores are unchanged.
     """
     tasks = []
     for repeat in range(n_repeats):
@@ -237,7 +276,7 @@ def repeated_group_cv(
         delayed(_run_fold)(
             estimator, X, y, groups, train_pos, test_pos, repeat, fold,
             inner_splits, seed + 1000 + repeat * n_splits + fold, fixed_threshold, calibrate,
-            threshold_group_column,
+            threshold_group_column, fbeta,
         )
         for train_pos, test_pos, repeat, fold in tasks
     )
