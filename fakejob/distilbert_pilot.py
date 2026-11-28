@@ -1,5 +1,7 @@
 """Grouped DistilBERT and SVM pilot comparisons on development data."""
+from contextlib import contextmanager
 from pathlib import Path
+import random
 import time
 import os
 from threadpoolctl import threadpool_limits
@@ -15,11 +17,51 @@ from fakejob.evaluation import all_metrics, best_f1_threshold
 from fakejob.features import STEP2_CONFIG, build_pipeline, posting_features
 
 
+def _gpu_device():
+    """Return a CUDA device (for example on Colab) or an Apple MPS device."""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    raise RuntimeError("This run needs a CUDA GPU or an Apple GPU with MPS enabled.")
+
+
+@contextmanager
+def _restore_global_state():
+    """Undo the thread, seed and environment changes made by the pilot."""
+    threads = torch.get_num_threads()
+    tokenizers = os.environ.get("TOKENIZERS_PARALLELISM")
+    python_rng, numpy_rng, torch_rng = random.getstate(), np.random.get_state(), torch.get_rng_state()
+    cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    try:
+        yield
+    finally:
+        torch.set_num_threads(threads)
+        if tokenizers is None:
+            os.environ.pop("TOKENIZERS_PARALLELISM", None)
+        else:
+            os.environ["TOKENIZERS_PARALLELISM"] = tokenizers
+        random.setstate(python_rng)
+        np.random.set_state(numpy_rng)
+        torch.set_rng_state(torch_rng)
+        if cuda_rng is not None:
+            torch.cuda.set_rng_state_all(cuda_rng)
+
+
 def run_pilot(*, use_gpu=False):
-    """Train both models once and save their paired validation metrics."""
+    """Train both models once and save their paired validation metrics.
+
+    Global settings (torch threads, random seeds, TOKENIZERS_PARALLELISM) are restored afterwards.
+    """
+    with _restore_global_state():
+        _run_pilot(use_gpu=use_gpu)
+
+
+def _run_pilot(*, use_gpu):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     if sklearn.__version__ != "1.6.1":
         raise RuntimeError("Use scikit-learn 1.6.1 for the original grouped split.")
+    device = _gpu_device() if use_gpu else torch.device("cpu")
     torch.set_num_threads(1)
     seed = 42
     set_seed(seed)
@@ -37,8 +79,6 @@ def run_pilot(*, use_gpu=False):
         return frame.iloc[keep]
 
     if use_gpu:
-        if not torch.backends.mps.is_available():
-            raise RuntimeError("This run needs an Apple GPU with MPS enabled.")
         # Take the first four of the same eight folds; fold zero was the original pilot.
         picker = StratifiedGroupKFold(n_splits=8, shuffle=True, random_state=seed)
         fit_folds = list(picker.split(fit, fit.fraudulent, split.groups.loc[fit.index]))
@@ -72,14 +112,13 @@ def run_pilot(*, use_gpu=False):
     checkpoint = "distilbert/distilbert-base-uncased"
     revision = "12040accade4e8a0f71eabdb258fecc2e7e948be"
     tokenizer = AutoTokenizer.from_pretrained(checkpoint, revision=revision)
-    # Explicit attention supports training dropout on the local Apple GPU.
-    attention_options = {"attn_implementation": "eager"} if use_gpu else {}
+    # Explicit attention supports training dropout on the Apple GPU.
+    attention_options = {"attn_implementation": "eager"} if device.type == "mps" else {}
     bert = AutoModelForSequenceClassification.from_pretrained(
         checkpoint, revision=revision, num_labels=2, **attention_options
     )
     bert.base_model.requires_grad_(False)
     bert.distilbert.transformer.layer[-1].requires_grad_(True)
-    device = torch.device("mps" if use_gpu else "cpu")
     bert.to(device)
     print(f"Fine-tuning on {device}", flush=True)
 
@@ -112,7 +151,7 @@ def run_pilot(*, use_gpu=False):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(bert.parameters(), 1.0)
         optimizer.step()
-        if use_gpu:
+        if device.type == "mps":
             # Let completed GPU work settle, then leave an idle interval between batches.
             torch.mps.synchronize()
             time.sleep(0.5 * (time.monotonic() - started))
