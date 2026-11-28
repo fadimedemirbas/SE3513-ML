@@ -11,10 +11,11 @@ SE3513 Machine Learning Project — Fake Job Posting Detection
 | `feature_engineering.ipynb` | Step 2: feature engineering ablations and the selected feature configuration |
 | `robustness_checks.ipynb` | Checks before Step 3: Step 2 selection on fresh CV folds and label-noise sensitivity analysis |
 | `model_extensions.ipynb` | Step 3: calibration, sentence-embedding features and LightGBM stacking against the Step 2 model |
+| `distilbert_ensemble.ipynb` | Step 5 (run on a GPU, e.g. Colab): fine-tuned DistilBERT and an SVM + DistilBERT ensemble in the same grouped cross-validation |
 | `f2_threshold.ipynb` | Recall-oriented operating point: an F2 threshold chosen on the same inner out-of-fold scores, compared with the F1 threshold |
 | `text_cleaning.ipynb` | Data-quality check: words joined when the HTML was removed, and whether repairing them improves the selected model |
 | `f1_improvements.ipynb` | F1 experiments for postings without a company profile: group thresholds, interaction features and an SVM + logistic regression ensemble |
-| `fakejob/` | Shared code: data loading and split (`data.py`), evaluation protocol (`evaluation.py`), model definitions (`models.py`), Step 2 features and configurable pipelines (`features.py`), sentence embeddings (`embeddings.py`) |
+| `fakejob/` | Shared code: data loading and split (`data.py`), evaluation protocol (`evaluation.py`), model definitions (`models.py`), Step 2 features and configurable pipelines (`features.py`), sentence embeddings (`embeddings.py`), DistilBERT fine-tuning (`transformer.py`) |
 | `results/` | Fold-level CV results and test confidence intervals, used for paired comparisons |
 | [Experiment progress and next steps](docs/experiment_progress.md) | Working comparison of completed experiments and open verification tasks |
 | `docs/pre_development_research_report.md` | Review of public notebooks on this dataset and the planned methodology |
